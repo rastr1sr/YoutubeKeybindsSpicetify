@@ -1,120 +1,161 @@
 /**
  * Youtube Keybinds Plugin for Spicetify
- * 
- * This plugin adds keyboard controls for playback, similar to YouTube-style keybinds.
- * Users can jump to specific sections of the currently playing song, seek forward/backward,
- * control volume, and navigate between tracks with keyboard shortcuts.
- * 
+ * Version: 1.7.0
+ * Author: Rastrisr (Original), Refactored by AI Assistant
+ * Description: Adds YouTube-style keyboard controls for playback. Jump, seek, volume, mute, and track navigation.
+ *
  * Keybinds:
- * - 0-9: Jump to a percentage of the song's duration (0 = 0%, 5 = 50%, etc.).
- * - Left Arrow: Seek backwards by 5 seconds.
- * - Right Arrow: Seek forwards by 5 seconds.
- * - J: Seek backwards by 10 seconds.
- * - L: Seek forwards by 10 seconds.
- * - K: Toggle pause/play.
- * - M: Mute/unmute using getMute() and setMute().
+ * - 0-9: Jump to % of song duration (0=0%, 5=50%, etc.).
+ * - Left Arrow: Seek backwards 5 seconds.
+ * - Right Arrow: Seek forwards 5 seconds.
+ * - J: Seek backwards 10 seconds.
+ * - L: Seek forwards 10 seconds.
+ * - K: Toggle play/pause.
+ * - M: Toggle mute/unmute.
  * - Up Arrow: Increase volume by 5%.
  * - Down Arrow: Decrease volume by 5%.
- * - Shift + N: Move to the next song.
- * - Shift + P: Move to the previous song.
- * 
- * Requirements:
- * - Spicetify must be installed and running for this plugin to work.
- * 
- * Author: Rastrisr
- * Version: 1.6.0
+ * - Shift + N: Next song.
+ * - Shift + P: Previous song.
+ *
+ * Note: Keybinds like J, L, K, M, 0-9, Shift+N/P are disabled when typing in input fields or text areas.
+ *       Arrow keys for seeking/volume work everywhere.
  */
-
 (function youtubeKeybinds() {
-    let lastVolumeChange = 0;
+    // Check if Spicetify and its Player API are available
+    if (!Spicetify || !Spicetify.Player) {
+        console.error("YTKeybinds: Spicetify or Spicetify.Player not available. Retrying in 1s.");
+        setTimeout(youtubeKeybinds, 1000);
+        return;
+    }
+    console.log("YTKeybinds: Plugin loaded.");
 
-    document.addEventListener('keydown', function (event) {
-        const key = event.key;
+    // --- Configuration Constants ---
+    const SEEK_TIME_ARROW_MS = 5000;    // 5 seconds in milliseconds
+    const SEEK_TIME_JL_MS = 10000;      // 10 seconds in milliseconds
+    const VOLUME_STEP = 0.05;           // 5% volume change
+    const VOLUME_THROTTLE_MS = 100;     // Prevent rapid volume changes (ms)
+
+    let lastVolumeChangeTimestamp = 0;
+
+    // --- Helper Functions ---
+
+    /** Safely gets player state, returning defaults if unavailable */
+    const getPlayerState = () => {
+        const duration = Spicetify.Player.getDuration() || 0;
+        const progress = Spicetify.Player.getProgress() || 0;
+        return { duration, progress };
+    };
+
+    /** Handles volume changes with throttling */
+    const handleVolumeChange = (increase) => {
+        const now = Date.now();
+        if (now - lastVolumeChangeTimestamp > VOLUME_THROTTLE_MS) {
+            const currentVolume = Spicetify.Player.getVolume();
+            const newVolume = increase
+                ? Math.min(currentVolume + VOLUME_STEP, 1)
+                : Math.max(currentVolume - VOLUME_STEP, 0);
+            Spicetify.Player.setVolume(newVolume);
+            lastVolumeChangeTimestamp = now;
+        }
+    };
+
+    // --- Event Listener ---
+    document.addEventListener('keydown', (event) => {
+        const key = event.key.toLowerCase(); // Normalize key to lowercase
         const activeElement = document.activeElement;
-        const isShiftPressed = event.shiftKey;
 
-        // Only arrow keys should work if the user is in an input field or textarea
-        const isInInputField = (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA');
+        // Check if the user is currently typing in an input, textarea, or contentEditable element
+        const isTyping = activeElement &&
+            (activeElement.tagName === 'INPUT' ||
+             activeElement.tagName === 'TEXTAREA' ||
+             activeElement.isContentEditable);
 
-        // Get current song duration and player state
-        const duration = Spicetify.Player.getDuration();
-        const currentPosition = Spicetify.Player.getProgress();
+        // Ignore keybinds if modifier keys (Ctrl, Alt, Meta) are pressed,
+        // except for Shift which is used for N/P.
+        // Also ignore if a Spicetify popup/modal is open.
+        if ((event.ctrlKey || event.metaKey || event.altKey) || Spicetify?.PopupModal?.isOpen?.()) {
+            return;
+        }
 
-        // Function to handle volume changes
-        const handleVolumeChange = (increase) => {
-            if (Date.now() - lastVolumeChange > 100) {
-                const volumeStep = 0.05;
-                const newVolume = increase
-                    ? Math.min(Spicetify.Player.getVolume() + volumeStep, 1)
-                    : Math.max(Spicetify.Player.getVolume() - volumeStep, 0);
-                Spicetify.Player.setVolume(newVolume);
-                lastVolumeChange = Date.now();
-            }
-        };
+        let playerState; // Lazily get player state only when needed
+        let handled = true; // Assume the keypress will be handled
 
-        // Handle key actions
+        // --- Handle Keys Allowed Everywhere ---
         switch (key) {
-            case 'ArrowLeft':
-                // Seek backwards 5 seconds
-                Spicetify.Player.seek(Math.max(currentPosition - 5000, 0));
+            case 'arrowleft':
+                playerState = getPlayerState();
+                Spicetify.Player.seek(Math.max(playerState.progress - SEEK_TIME_ARROW_MS, 0));
                 break;
-            case 'ArrowRight':
-                // Seek forwards 5 seconds
-                Spicetify.Player.seek(Math.min(currentPosition + 5000, duration));
+            case 'arrowright':
+                playerState = getPlayerState();
+                Spicetify.Player.seek(Math.min(playerState.progress + SEEK_TIME_ARROW_MS, playerState.duration));
                 break;
-            case 'ArrowUp':
-                handleVolumeChange(true); // Increase volume by 5%
+            case 'arrowup':
+                handleVolumeChange(true);
                 break;
-            case 'ArrowDown':
-                handleVolumeChange(false); // Decrease volume by 5%
+            case 'arrowdown':
+                handleVolumeChange(false);
                 break;
+
+            // --- Handle Keys Disabled During Typing ---
             default:
-                // Handle other keys only when the user is NOT in an input field
-                if (!isInInputField) {
-                    switch (key) {
-                        case 'j':
-                        case 'J':
-                            // Seek backwards 10 seconds
-                            Spicetify.Player.seek(Math.max(currentPosition - 10000, 0));
-                            break;
-                        case 'l':
-                        case 'L':
-                            // Seek forwards 10 seconds
-                            Spicetify.Player.seek(Math.min(currentPosition + 10000, duration));
-                            break;
-                        case 'k':
-                        case 'K':
-                            // Toggle pause/play
-                            Spicetify.Player.isPlaying() ? Spicetify.Player.pause() : Spicetify.Player.play();
-                            break;
-                        case 'm':
-                        case 'M':
-                            // Mute/unmute using getMute() and setMute()
-                            Spicetify.Player.setMute(!Spicetify.Player.getMute());
-                            break;
-                        case 'n':
-                        case 'N':
-                            if (isShiftPressed) {
-                                // Move to the next song with Shift + N
-                                Spicetify.Player.next();
+                if (isTyping) {
+                    handled = false; // Don't handle other keys if typing
+                    break;
+                }
+
+                // Process keys only if not typing
+                switch(key) {
+                    case 'j':
+                        playerState = getPlayerState();
+                        Spicetify.Player.seek(Math.max(playerState.progress - SEEK_TIME_JL_MS, 0));
+                        break;
+                    case 'l':
+                        playerState = getPlayerState();
+                        Spicetify.Player.seek(Math.min(playerState.progress + SEEK_TIME_JL_MS, playerState.duration));
+                        break;
+                    case 'k':
+                        Spicetify.Player.togglePlay();
+                        break;
+                    case 'm':
+                        Spicetify.Player.toggleMute();
+                        break;
+                    case 'n': // Requires Shift
+                        if (event.shiftKey) {
+                            Spicetify.Player.next();
+                        } else {
+                            handled = false; // 'n' alone is not handled
+                        }
+                        break;
+                    case 'p': // Requires Shift
+                        if (event.shiftKey) {
+                            Spicetify.Player.back();
+                        } else {
+                            handled = false; // 'p' alone is not handled
+                        }
+                        break;
+                    default:
+                        // Handle number keys (0-9) for seeking
+                        if (/^[0-9]$/.test(key)) {
+                            playerState = getPlayerState();
+                            if (playerState.duration > 0) {
+                                const seekPercent = parseInt(key) / 10;
+                                Spicetify.Player.seek(seekPercent * playerState.duration);
+                            } else {
+                                handled = false; // Cannot seek if duration is 0
                             }
-                            break;
-                        case 'p':
-                        case 'P':
-                            if (isShiftPressed) {
-                                // Move to the previous song with Shift + P
-                                Spicetify.Player.back();
-                            }
-                            break;
-                        default:
-                            // Handle number keys (0-9) to jump to specific section of the song
-                            if (!isNaN(key) && key >= '0' && key <= '9') {
-                                const seekPosition = (parseInt(key) / 10) * duration;
-                                Spicetify.Player.seek(seekPosition);
-                            }
-                            break;
-                    }
+                        } else {
+                            handled = false; // Key is not recognized by this plugin
+                        }
+                        break;
                 }
         }
+
+        // Prevent default browser action (e.g., scrolling, typing numbers)
+        // only if the keybind was successfully handled by this plugin.
+        if (handled) {
+            event.preventDefault();
+        }
     });
-})();
+
+})(); // End of IIFE
