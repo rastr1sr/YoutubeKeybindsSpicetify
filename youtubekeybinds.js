@@ -55,7 +55,7 @@
 
   // --- Utility functions ---
 
-  // Get playback state (duration & progress)
+  // Get playback state (duration and progress of current track)
   function getState() {
     return {
       duration: Spicetify.Player.getDuration() || 0,
@@ -63,39 +63,48 @@
     };
   }
 
-  // Adjust volume with throttling & show notification
+  // Show toast notification (works across Spicetify versions)
+  function notify(msg) {
+    if (Spicetify.showNotification) {
+      Spicetify.showNotification(msg);
+    } else {
+      new Spicetify.Popup.Notification(msg).show();
+    }
+  }
+
+  // Adjust volume up or down with throttling
   function changeVolume(increase) {
     const now = Date.now();
-    if (now - lastVolChange < VOLUME_THROTTLE_MS) return;
+    if (now - lastVolChange < VOLUME_THROTTLE_MS) return; // enforce throttle
     lastVolChange = now;
 
     const cur = Spicetify.Player.getVolume();
     const next = increase
       ? Math.min(cur + VOLUME_STEP, 1)
       : Math.max(cur - VOLUME_STEP, 0);
-    Spicetify.Player.setVolume(next);
 
-    Spicetify.showNotification(`Volume: ${(next * 100).toFixed(0)}%`);
+    Spicetify.Player.setVolume(next);
+    notify(`Volume: ${(next * 100).toFixed(0)}%`);
   }
 
-  // Toggle mute with safe fallback
+  // Toggle mute/unmute, fallback if toggleMute not supported
   function toggleMuteSafe() {
     if (typeof Spicetify.Player.toggleMute === "function") {
       Spicetify.Player.toggleMute();
-      Spicetify.showNotification("Mute toggled");
+      notify("Mute toggled");
     } else {
       const cur = Spicetify.Player.getVolume();
       if (cur > 0) {
         Spicetify.Player.setVolume(0);
-        Spicetify.showNotification("Muted");
+        notify("Muted");
       } else {
         Spicetify.Player.setVolume(0.5);
-        Spicetify.showNotification("Unmuted (50%)");
+        notify("Unmuted (50%)");
       }
     }
   }
 
-  // Detect if the user is typing (input/textarea/contentEditable)
+  // Detect if the user is typing in an input, textarea, or contentEditable
   function isTypingContext() {
     const el = document.activeElement;
     if (!el) return false;
@@ -103,17 +112,17 @@
     return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
   }
 
-  // Register a keybind with safety checks
+  // Register a keybind with Spicetify.Keyboard, with safety checks
   function register(name, def, handler, { allowWhileTyping = false } = {}) {
     try {
       Spicetify.Keyboard.registerShortcut(def, (event) => {
-        // Block if typing unless explicitly allowed
+        // Don’t trigger if typing in a text field unless explicitly allowed
         if (!allowWhileTyping && isTypingContext()) return;
-        // Ignore Ctrl, Alt, Meta to avoid conflicts
+        // Ignore system modifiers
         if (event.ctrlKey || event.altKey || event.metaKey) return;
 
         handler(event);
-        event.preventDefault();
+        event.preventDefault(); // prevent browser default
       });
     } catch (err) {
       console.error(`YTKeybinds: Failed registering ${name}`, err);
@@ -122,41 +131,49 @@
 
   // --- Register Actions ---
 
-  // Arrow keys: 5s seek
+  // Arrow keys: seek ±5s, adjust volume
   register("seekBackSmall", keyMap.seekBackSmall, () => {
+    if (isTypingContext()) return; // FIX: let arrow keys work in inputs
     const { progress } = getState();
     Spicetify.Player.seek(Math.max(progress - SEEK_SMALL_MS, 0));
-    Spicetify.showNotification("⏪ -5s");
+    notify("⏪ -5s");
   });
 
   register("seekForwardSmall", keyMap.seekForwardSmall, () => {
+    if (isTypingContext()) return;
     const { progress, duration } = getState();
     Spicetify.Player.seek(Math.min(progress + SEEK_SMALL_MS, duration));
-    Spicetify.showNotification("⏩ +5s");
+    notify("⏩ +5s");
   });
 
-  // Volume up/down
-  register("volumeUp", keyMap.volumeUp, () => changeVolume(true));
-  register("volumeDown", keyMap.volumeDown, () => changeVolume(false));
+  register("volumeUp", keyMap.volumeUp, () => {
+    if (isTypingContext()) return;
+    changeVolume(true);
+  });
 
-  // J / L: 10s seek
+  register("volumeDown", keyMap.volumeDown, () => {
+    if (isTypingContext()) return;
+    changeVolume(false);
+  });
+
+  // J / L: seek ±10s
   register("seekBackBig", keyMap.seekBackBig, () => {
     const { progress } = getState();
     Spicetify.Player.seek(Math.max(progress - SEEK_BIG_MS, 0));
-    Spicetify.showNotification("⏪ -10s");
+    notify("⏪ -10s");
   });
 
   register("seekForwardBig", keyMap.seekForwardBig, () => {
     const { progress, duration } = getState();
     Spicetify.Player.seek(Math.min(progress + SEEK_BIG_MS, duration));
-    Spicetify.showNotification("⏩ +10s");
+    notify("⏩ +10s");
   });
 
   // K: toggle play/pause
   register("togglePlay", keyMap.togglePlay, () => {
     Spicetify.Player.togglePlay();
     const isPlaying = Spicetify.Player.isPlaying();
-    Spicetify.showNotification(isPlaying ? "▶ Playing" : "⏸ Paused");
+    notify(isPlaying ? "▶ Playing" : "⏸ Paused");
   });
 
   // M: toggle mute
@@ -164,24 +181,24 @@
     toggleMuteSafe();
   });
 
-  // Shift+N / Shift+P: next/prev track
+  // Shift+N / Shift+P: next/previous track
   register("nextTrack", keyMap.nextTrack, () => {
     Spicetify.Player.next();
-    Spicetify.showNotification("⏭ Next Track");
+    notify("⏭ Next Track");
   });
 
   register("prevTrack", keyMap.prevTrack, () => {
     Spicetify.Player.back();
-    Spicetify.showNotification("⏮ Previous Track");
+    notify("⏮ Previous Track");
   });
 
-  // Number keys 0–9: jump to % of track
+  // Number keys 0–9: jump to percentage of track
   for (let d = 0; d <= 9; d++) {
     register(`jump${d}`, keyMap[`jump${d}`], () => {
       const { duration } = getState();
       if (duration > 0) {
         Spicetify.Player.seek((d / 10) * duration);
-        Spicetify.showNotification(`Jump to ${d * 10}%`);
+        notify(`Jump to ${d * 10}%`);
       }
     });
   }
