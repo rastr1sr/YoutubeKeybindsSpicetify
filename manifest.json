@@ -3,6 +3,7 @@
     "description": "Provides YouTube-style keybinds for playback control and volume adjustments in Spicetify.",
     "preview": "preview.png",
     "main": "youtubekeybinds.js",
+    "branch": "main",
     "readme": "README.md",
     "authors": [
         {
