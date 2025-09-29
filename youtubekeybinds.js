@@ -52,6 +52,7 @@
   const VOLUME_THROTTLE_MS = 100; // Prevents rapid volume spamming
 
   let lastVolChange = 0;
+  let lastVolume = 0.5;
 
   // --- Utility functions ---
 
@@ -68,7 +69,7 @@
     if (Spicetify.showNotification) {
       Spicetify.showNotification(msg);
     } else {
-      new Spicetify.Popup.Notification(msg).show();
+      new Spicetify.Popup.Notification(msg).show(1000);
     }
   }
 
@@ -83,26 +84,24 @@
       ? Math.min(cur + VOLUME_STEP, 1)
       : Math.max(cur - VOLUME_STEP, 0);
 
+    if (next > 0) lastVolume = next; // remember last non-zero vol
     Spicetify.Player.setVolume(next);
     notify(`Volume: ${(next * 100).toFixed(0)}%`);
   }
 
-  // Toggle mute/unmute, fallback if toggleMute not supported
+  // Toggle mute/unmute
   function toggleMuteSafe() {
-    if (typeof Spicetify.Player.toggleMute === "function") {
-      Spicetify.Player.toggleMute();
-      notify("Mute toggled");
+    const cur = Spicetify.Player.getVolume();
+    if (cur > 0) {
+      lastVolume = cur;
+      Spicetify.Player.setVolume(0);
+      notify("Muted");        
     } else {
-      const cur = Spicetify.Player.getVolume();
-      if (cur > 0) {
-        Spicetify.Player.setVolume(0);
-        notify("Muted");
-      } else {
-        Spicetify.Player.setVolume(0.5);
-        notify("Unmuted (50%)");
-      }
+      Spicetify.Player.setVolume(lastVolume || 0.5);
+      notify("Unmuted");
     }
   }
+
 
   // Detect if the user is typing in an input, textarea, or contentEditable
   function isTypingContext() {
@@ -171,9 +170,9 @@
 
   // K: toggle play/pause
   register("togglePlay", keyMap.togglePlay, () => {
+    const wasPlaying = Spicetify.Player.isPlaying();
     Spicetify.Player.togglePlay();
-    const isPlaying = Spicetify.Player.isPlaying();
-    notify(isPlaying ? "▶ Playing" : "⏸ Paused");
+    notify(wasPlaying ? "⏸ Paused" : "▶ Playing");
   });
 
   // M: toggle mute
