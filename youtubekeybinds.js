@@ -1,204 +1,226 @@
 /**
- * Youtube Keybinds Extension for Spicetify
- * Version: 2.0.0
+ * YouTube Keybinds for Spicetify
+ * Version: 3.0.0
  * Author: Rastrisr
  *
- * Features:
- * - YouTube-style playback shortcuts for Spotify.
- * - Arrow keys, J/K/L, M, numbers 0–9, Shift+N/P.
- * - Fixed: Arrow keys no longer override cursor movement in input fields.
- *
- * Usage:
- * Place in your Spicetify Extensions folder and enable via:
- *   spicetify config extensions youtubeKeybinds.js
- *   spicetify apply
+ *   Left/Right   seek -5s / +5s (hold to repeat)
+ *   Up/Down      volume +5% / -5% (hold to repeat)
+ *   J / L        seek -10s / +10s (hold to repeat)
+ *   K            play / pause
+ *   M            mute / unmute
+ *   0 - 9        jump to 0% - 90%
+ *   Home / End   jump to start / end
+ *   Shift+N / Shift+P   next / previous track
  */
 
-(function youtubeKeybinds() {
-  // Wait until Spicetify APIs are available
-  if (!window.Spicetify || !Spicetify.Player || !Spicetify.Keyboard) {
-    console.warn("YTKeybinds: Spicetify not ready, retrying...");
-    setTimeout(youtubeKeybinds, 1000);
-    return;
-  }
+(function () {
+  "use strict";
 
-  console.log("YTKeybinds: Loaded (v2.0.0)");
+  (function bootstrap(retriesLeft) {
+    const ready =
+      window.Spicetify &&
+      Spicetify.Player &&
+      typeof Spicetify.Player.seek === "function" &&
+      typeof Spicetify.Player.getDuration === "function" &&
+      typeof Spicetify.showNotification === "function";
 
-  // --- KeyMap: configurable key definitions ---
-  // Each entry corresponds to a specific action.
-  // Keys follow Spicetify.Keyboard format: { key: "letter", shift: true }
-  const keyMap = {
-    seekBackSmall: { key: "left" },              // ← back 5s
-    seekForwardSmall: { key: "right" },          // → forward 5s
-    volumeUp: { key: "up" },                     // ↑ volume +5%
-    volumeDown: { key: "down" },                 // ↓ volume -5%
-    seekBackBig: { key: "j" },                   // J back 10s
-    seekForwardBig: { key: "l" },                // L forward 10s
-    togglePlay: { key: "k" },                    // K play/pause
-    toggleMute: { key: "m" },                    // M mute/unmute
-    nextTrack: { key: "n", shift: true },        // Shift+N next track
-    prevTrack: { key: "p", shift: true },        // Shift+P previous track
-    jump0: { key: "0" }, jump1: { key: "1" },    // 0–9 jump by %
-    jump2: { key: "2" }, jump3: { key: "3" },
-    jump4: { key: "4" }, jump5: { key: "5" },
-    jump6: { key: "6" }, jump7: { key: "7" },
-    jump8: { key: "8" }, jump9: { key: "9" },
-  };
-
-  // --- Constants controlling behavior ---
-  const SEEK_SMALL_MS = 5000;   // Left/Right Arrow
-  const SEEK_BIG_MS = 10000;    // J / L
-  const VOLUME_STEP = 0.05;     // Volume step (5%)
-  const VOLUME_THROTTLE_MS = 100; // Prevents rapid volume spamming
-
-  let lastVolChange = 0;
-  let lastVolume = 0.5;
-
-  // --- Utility functions ---
-
-  // Get playback state (duration and progress of current track)
-  function getState() {
-    return {
-      duration: Spicetify.Player.getDuration() || 0,
-      progress: Spicetify.Player.getProgress() || 0,
-    };
-  }
-
-  // Show toast notification (works across Spicetify versions)
-  function notify(msg) {
-    if (Spicetify.showNotification) {
-      Spicetify.showNotification(msg);
-    } else {
-      new Spicetify.Popup.Notification(msg).show(1000);
-    }
-  }
-
-  // Adjust volume up or down with throttling
-  function changeVolume(increase) {
-    const now = Date.now();
-    if (now - lastVolChange < VOLUME_THROTTLE_MS) return; // enforce throttle
-    lastVolChange = now;
-
-    const cur = Spicetify.Player.getVolume();
-    const next = increase
-      ? Math.min(cur + VOLUME_STEP, 1)
-      : Math.max(cur - VOLUME_STEP, 0);
-
-    if (next > 0) lastVolume = next; // remember last non-zero vol
-    Spicetify.Player.setVolume(next);
-    notify(`Volume: ${(next * 100).toFixed(0)}%`);
-  }
-
-  // Toggle mute/unmute
-  function toggleMuteSafe() {
-    const cur = Spicetify.Player.getVolume();
-    if (cur > 0) {
-      lastVolume = cur;
-      Spicetify.Player.setVolume(0);
-      notify("Muted");        
-    } else {
-      Spicetify.Player.setVolume(lastVolume || 0.5);
-      notify("Unmuted");
-    }
-  }
-
-
-  // Detect if the user is typing in an input, textarea, or contentEditable
-  function isTypingContext() {
-    const el = document.activeElement;
-    if (!el) return false;
-    const tag = el.tagName;
-    return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
-  }
-
-  // Register a keybind with Spicetify.Keyboard, with safety checks
-  function register(name, def, handler, { allowWhileTyping = false } = {}) {
-    try {
-      Spicetify.Keyboard.registerShortcut(def, (event) => {
-        // Don’t trigger if typing in a text field unless explicitly allowed
-        if (!allowWhileTyping && isTypingContext()) return;
-        // Ignore system modifiers
-        if (event.ctrlKey || event.altKey || event.metaKey) return;
-
-        handler(event);
-        event.preventDefault(); // prevent browser default
-      });
-    } catch (err) {
-      console.error(`YTKeybinds: Failed registering ${name}`, err);
-    }
-  }
-
-  // --- Register Actions ---
-
-  // Arrow keys: seek ±5s, adjust volume
-  register("seekBackSmall", keyMap.seekBackSmall, () => {
-    if (isTypingContext()) return; // FIX: let arrow keys work in inputs
-    const { progress } = getState();
-    Spicetify.Player.seek(Math.max(progress - SEEK_SMALL_MS, 0));
-    notify("⏪ -5s");
-  });
-
-  register("seekForwardSmall", keyMap.seekForwardSmall, () => {
-    if (isTypingContext()) return;
-    const { progress, duration } = getState();
-    Spicetify.Player.seek(Math.min(progress + SEEK_SMALL_MS, duration));
-    notify("⏩ +5s");
-  });
-
-  register("volumeUp", keyMap.volumeUp, () => {
-    if (isTypingContext()) return;
-    changeVolume(true);
-  });
-
-  register("volumeDown", keyMap.volumeDown, () => {
-    if (isTypingContext()) return;
-    changeVolume(false);
-  });
-
-  // J / L: seek ±10s
-  register("seekBackBig", keyMap.seekBackBig, () => {
-    const { progress } = getState();
-    Spicetify.Player.seek(Math.max(progress - SEEK_BIG_MS, 0));
-    notify("⏪ -10s");
-  });
-
-  register("seekForwardBig", keyMap.seekForwardBig, () => {
-    const { progress, duration } = getState();
-    Spicetify.Player.seek(Math.min(progress + SEEK_BIG_MS, duration));
-    notify("⏩ +10s");
-  });
-
-  // K: toggle play/pause
-  register("togglePlay", keyMap.togglePlay, () => {
-    const wasPlaying = Spicetify.Player.isPlaying();
-    Spicetify.Player.togglePlay();
-    notify(wasPlaying ? "⏸ Paused" : "▶ Playing");
-  });
-
-  // M: toggle mute
-  register("toggleMute", keyMap.toggleMute, () => {
-    toggleMuteSafe();
-  });
-
-  // Shift+N / Shift+P: next/previous track
-  register("nextTrack", keyMap.nextTrack, () => {
-    Spicetify.Player.next();
-    notify("⏭ Next Track");
-  });
-
-  register("prevTrack", keyMap.prevTrack, () => {
-    Spicetify.Player.back();
-    notify("⏮ Previous Track");
-  });
-
-  // Number keys 0–9: jump to percentage of track
-  for (let d = 0; d <= 9; d++) {
-    register(`jump${d}`, keyMap[`jump${d}`], () => {
-      const { duration } = getState();
-      if (duration > 0) {
-        Spicetify.Player.seek((d / 10) * duration);
-        notify(`Jump to ${d * 10}%`);
+    if (!ready) {
+      if (retriesLeft <= 0) {
+        console.error("[YTKeybinds] Spicetify never became ready, giving up.");
+        return;
       }
-    });
+      setTimeout(() => bootstrap(retriesLeft - 1), 300);
+      return;
+    }
+    if (window.__youtubeKeybindsLoaded) return;
+    window.__youtubeKeybindsLoaded = true;
+    main();
+  })(100);
+
+  function main() {
+    const VERSION = "3.0.0";
+
+    const SEEK_SMALL_MS = 5000;
+    const SEEK_BIG_MS = 10000;
+    const VOLUME_STEP = 0.05;
+    const VOLUME_THROTTLE_MS = 60;
+    const TOAST_MS = 1000;
+
+    // Combo string is an optional "shift+" prefix plus event.key, lower-cased.
+    // Digits 0-9 are handled separately.
+    const keyMap = {
+      seekBackSmall: "arrowleft",
+      seekForwardSmall: "arrowright",
+      volumeUp: "arrowup",
+      volumeDown: "arrowdown",
+      seekBackBig: "j",
+      seekForwardBig: "l",
+      togglePlay: "k",
+      toggleMute: "m",
+      nextTrack: "shift+n",
+      prevTrack: "shift+p",
+      seekStart: "home",
+      seekEnd: "end",
+    };
+
+    function safe(fn, fallback) {
+      try {
+        const v = fn();
+        return v == null ? fallback : v;
+      } catch (err) {
+        console.error("[YTKeybinds] action failed", err);
+        return fallback;
+      }
+    }
+
+    function clampVolume(v) {
+      if (typeof v !== "number" || Number.isNaN(v)) return 0;
+      v = Math.round(v * 100) / 100;
+      if (v < 0.001) return 0;
+      if (v > 1) return 1;
+      return v;
+    }
+
+    let lastNonZeroVolume =
+      clampVolume(safe(() => Spicetify.Player.getVolume(), 0.5)) || 0.5;
+    let lastVolChange = 0;
+
+    let lastToast = { msg: "", at: 0 };
+    function notify(msg) {
+      const now = Date.now();
+      if (msg === lastToast.msg && now - lastToast.at < 250) return;
+      lastToast = { msg, at: now };
+      safe(() => Spicetify.showNotification(msg, false, TOAST_MS));
+    }
+
+    const duration = () => safe(() => Spicetify.Player.getDuration(), 0) || 0;
+    const progress = () => safe(() => Spicetify.Player.getProgress(), 0) || 0;
+
+    function seekBy(deltaMs) {
+      const dur = duration();
+      if (dur <= 0) return;
+      const target = Math.min(Math.max(progress() + deltaMs, 0), dur);
+      safe(() => Spicetify.Player.seek(target));
+      notify(`${deltaMs < 0 ? "" : "+"}${deltaMs / 1000}s`);
+    }
+
+    function seekToFraction(frac) {
+      const dur = duration();
+      if (dur <= 0) return;
+      frac = Math.min(Math.max(frac, 0), 1);
+      safe(() => Spicetify.Player.seek(frac * dur));
+      notify(`Jump to ${Math.round(frac * 100)}%`);
+    }
+
+    function changeVolume(increase) {
+      const now = Date.now();
+      if (now - lastVolChange < VOLUME_THROTTLE_MS) return;
+      lastVolChange = now;
+
+      const cur = clampVolume(
+        safe(() => Spicetify.Player.getVolume(), lastNonZeroVolume)
+      );
+      const next = clampVolume(increase ? cur + VOLUME_STEP : cur - VOLUME_STEP);
+      if (next > 0) lastNonZeroVolume = next;
+      safe(() => Spicetify.Player.setVolume(next));
+      notify(`Volume ${Math.round(next * 100)}%`);
+    }
+
+    function toggleMute() {
+      const cur = clampVolume(safe(() => Spicetify.Player.getVolume(), 0));
+      if (cur > 0) {
+        lastNonZeroVolume = cur;
+        safe(() => Spicetify.Player.setVolume(0));
+        notify("Muted");
+      } else {
+        const restore = lastNonZeroVolume || 0.5;
+        safe(() => Spicetify.Player.setVolume(restore));
+        notify(`Volume ${Math.round(restore * 100)}%`);
+      }
+    }
+
+    function togglePlay() {
+      const wasPlaying = safe(() => Spicetify.Player.isPlaying(), false);
+      safe(() => Spicetify.Player.togglePlay());
+      notify(wasPlaying ? "Paused" : "Playing");
+    }
+
+    function nextTrack() {
+      safe(() => Spicetify.Player.next());
+      notify("Next track");
+    }
+
+    function prevTrack() {
+      safe(() => Spicetify.Player.back());
+      notify("Previous track");
+    }
+
+    const actions = {
+      seekBackSmall: { run: () => seekBy(-SEEK_SMALL_MS), repeatable: true },
+      seekForwardSmall: { run: () => seekBy(SEEK_SMALL_MS), repeatable: true },
+      seekBackBig: { run: () => seekBy(-SEEK_BIG_MS), repeatable: true },
+      seekForwardBig: { run: () => seekBy(SEEK_BIG_MS), repeatable: true },
+      volumeUp: { run: () => changeVolume(true), repeatable: true },
+      volumeDown: { run: () => changeVolume(false), repeatable: true },
+      togglePlay: { run: togglePlay, repeatable: false },
+      toggleMute: { run: toggleMute, repeatable: false },
+      nextTrack: { run: nextTrack, repeatable: false },
+      prevTrack: { run: prevTrack, repeatable: false },
+      seekStart: { run: () => seekToFraction(0), repeatable: false },
+      seekEnd: { run: () => seekToFraction(1), repeatable: false },
+    };
+
+    const lookup = new Map();
+    for (const [action, combos] of Object.entries(keyMap)) {
+      for (const combo of Array.isArray(combos) ? combos : [combos]) {
+        lookup.set(combo, action);
+      }
+    }
+
+    function isInteractiveTarget() {
+      const el = document.activeElement;
+      if (!el || el === document.body) return false;
+      const tag = el.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+      if (el.isContentEditable) return true;
+      const role = el.getAttribute && el.getAttribute("role");
+      return (
+        role === "textbox" ||
+        role === "searchbox" ||
+        role === "combobox" ||
+        role === "slider"
+      );
+    }
+
+    function comboFor(e) {
+      return (e.shiftKey ? "shift+" : "") + e.key.toLowerCase();
+    }
+
+    function onKeyDown(e) {
+      if (e.defaultPrevented || e.isComposing) return;
+      if (e.ctrlKey || e.altKey || e.metaKey) return;
+      if (isInteractiveTarget()) return;
+
+      if (!e.shiftKey && e.key.length === 1 && e.key >= "0" && e.key <= "9") {
+        e.preventDefault();
+        e.stopPropagation();
+        seekToFraction(Number(e.key) / 10);
+        return;
+      }
+
+      const actionName = lookup.get(comboFor(e));
+      if (!actionName) return;
+
+      const { run, repeatable } = actions[actionName];
+      if (e.repeat && !repeatable) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      run();
+    }
+
+    // Capture phase so we beat Spotify's own handlers to the key.
+    document.addEventListener("keydown", onKeyDown, true);
+    console.log(`[YTKeybinds] loaded v${VERSION}`);
   }
 })();
