@@ -1,6 +1,6 @@
 /**
  * YouTube Keybinds for Spicetify
- * Version: 3.0.0
+ * Version: 3.0.1
  * Author: Rastrisr
  *
  *   Left/Right   seek -5s / +5s (hold to repeat)
@@ -16,211 +16,105 @@
 (function () {
   "use strict";
 
-  (function bootstrap(retriesLeft) {
-    const ready =
-      window.Spicetify &&
-      Spicetify.Player &&
-      typeof Spicetify.Player.seek === "function" &&
-      typeof Spicetify.Player.getDuration === "function" &&
-      typeof Spicetify.showNotification === "function";
+  const VOLUME_STEP = 0.05;
+  const REPEAT_THROTTLE_MS = 60;
+  const TOAST_MS = 1000;
+  const INTERACTIVE =
+    "input,textarea,select,[contenteditable]:not([contenteditable=false])," +
+    "[role=textbox],[role=searchbox],[role=combobox],[role=slider]";
 
-    if (!ready) {
-      if (retriesLeft <= 0) {
-        console.error("[YTKeybinds] Spicetify never became ready, giving up.");
-        return;
-      }
-      setTimeout(() => bootstrap(retriesLeft - 1), 300);
-      return;
+  const clampVol = (v) => Math.min(Math.max(Math.round(v * 100) / 100 || 0, 0), 1);
+  const notify = (msg) => Spicetify.showNotification(msg, false, TOAST_MS);
+
+  let tries = 100;
+  const poll = setInterval(() => {
+    if (window.Spicetify?.Player?.seek && Spicetify.showNotification) {
+      clearInterval(poll);
+      main();
+    } else if (--tries <= 0) {
+      clearInterval(poll);
+      console.error("[YTKeybinds] Spicetify never became ready, giving up.");
     }
-    if (window.__youtubeKeybindsLoaded) return;
-    window.__youtubeKeybindsLoaded = true;
-    main();
-  })(100);
+  }, 300);
 
   function main() {
-    const VERSION = "3.0.0";
-
-    const SEEK_SMALL_MS = 5000;
-    const SEEK_BIG_MS = 10000;
-    const VOLUME_STEP = 0.05;
-    const VOLUME_THROTTLE_MS = 60;
-    const TOAST_MS = 1000;
-
-    // Combo string is an optional "shift+" prefix plus event.key, lower-cased.
-    // Digits 0-9 are handled separately.
-    const keyMap = {
-      seekBackSmall: "arrowleft",
-      seekForwardSmall: "arrowright",
-      volumeUp: "arrowup",
-      volumeDown: "arrowdown",
-      seekBackBig: "j",
-      seekForwardBig: "l",
-      togglePlay: "k",
-      toggleMute: "m",
-      nextTrack: "shift+n",
-      prevTrack: "shift+p",
-      seekStart: "home",
-      seekEnd: "end",
-    };
-
-    function safe(fn, fallback) {
-      try {
-        const v = fn();
-        return v == null ? fallback : v;
-      } catch (err) {
-        console.error("[YTKeybinds] action failed", err);
-        return fallback;
-      }
-    }
-
-    function clampVolume(v) {
-      if (typeof v !== "number" || Number.isNaN(v)) return 0;
-      v = Math.round(v * 100) / 100;
-      if (v < 0.001) return 0;
-      if (v > 1) return 1;
-      return v;
-    }
-
-    let lastNonZeroVolume =
-      clampVolume(safe(() => Spicetify.Player.getVolume(), 0.5)) || 0.5;
-    let lastVolChange = 0;
-
-    let lastToast = { msg: "", at: 0 };
-    function notify(msg) {
-      const now = Date.now();
-      if (msg === lastToast.msg && now - lastToast.at < 250) return;
-      lastToast = { msg, at: now };
-      safe(() => Spicetify.showNotification(msg, false, TOAST_MS));
-    }
-
-    const duration = () => safe(() => Spicetify.Player.getDuration(), 0) || 0;
-    const progress = () => safe(() => Spicetify.Player.getProgress(), 0) || 0;
+    const P = Spicetify.Player;
+    let lastNonZeroVolume = clampVol(P.getVolume?.()) || 0.5;
+    let lastRepeat = 0;
 
     function seekBy(deltaMs) {
-      const dur = duration();
+      const dur = P.getDuration();
       if (dur <= 0) return;
-      const target = Math.min(Math.max(progress() + deltaMs, 0), dur);
-      safe(() => Spicetify.Player.seek(target));
+      P.seek(Math.min(Math.max(P.getProgress() + deltaMs, 0), dur));
       notify(`${deltaMs < 0 ? "" : "+"}${deltaMs / 1000}s`);
     }
 
     function seekToFraction(frac) {
-      const dur = duration();
+      const dur = P.getDuration();
       if (dur <= 0) return;
-      frac = Math.min(Math.max(frac, 0), 1);
-      safe(() => Spicetify.Player.seek(frac * dur));
+      P.seek(frac * dur);
       notify(`Jump to ${Math.round(frac * 100)}%`);
     }
 
-    function changeVolume(increase) {
-      const now = Date.now();
-      if (now - lastVolChange < VOLUME_THROTTLE_MS) return;
-      lastVolChange = now;
-
-      const cur = clampVolume(
-        safe(() => Spicetify.Player.getVolume(), lastNonZeroVolume)
-      );
-      const next = clampVolume(increase ? cur + VOLUME_STEP : cur - VOLUME_STEP);
+    function changeVolume(step) {
+      const next = clampVol(clampVol(P.getVolume()) + step);
       if (next > 0) lastNonZeroVolume = next;
-      safe(() => Spicetify.Player.setVolume(next));
+      P.setVolume(next);
       notify(`Volume ${Math.round(next * 100)}%`);
     }
 
     function toggleMute() {
-      const cur = clampVolume(safe(() => Spicetify.Player.getVolume(), 0));
-      if (cur > 0) {
-        lastNonZeroVolume = cur;
-        safe(() => Spicetify.Player.setVolume(0));
-        notify("Muted");
-      } else {
-        const restore = lastNonZeroVolume || 0.5;
-        safe(() => Spicetify.Player.setVolume(restore));
-        notify(`Volume ${Math.round(restore * 100)}%`);
-      }
+      const cur = clampVol(P.getVolume());
+      if (cur > 0) lastNonZeroVolume = cur;
+      const next = cur > 0 ? 0 : lastNonZeroVolume || 0.5;
+      P.setVolume(next);
+      notify(next > 0 ? `Volume ${Math.round(next * 100)}%` : "Muted");
     }
 
-    function togglePlay() {
-      const wasPlaying = safe(() => Spicetify.Player.isPlaying(), false);
-      safe(() => Spicetify.Player.togglePlay());
-      notify(wasPlaying ? "Paused" : "Playing");
-    }
-
-    function nextTrack() {
-      safe(() => Spicetify.Player.next());
-      notify("Next track");
-    }
-
-    function prevTrack() {
-      safe(() => Spicetify.Player.back());
-      notify("Previous track");
-    }
-
-    const actions = {
-      seekBackSmall: { run: () => seekBy(-SEEK_SMALL_MS), repeatable: true },
-      seekForwardSmall: { run: () => seekBy(SEEK_SMALL_MS), repeatable: true },
-      seekBackBig: { run: () => seekBy(-SEEK_BIG_MS), repeatable: true },
-      seekForwardBig: { run: () => seekBy(SEEK_BIG_MS), repeatable: true },
-      volumeUp: { run: () => changeVolume(true), repeatable: true },
-      volumeDown: { run: () => changeVolume(false), repeatable: true },
-      togglePlay: { run: togglePlay, repeatable: false },
-      toggleMute: { run: toggleMute, repeatable: false },
-      nextTrack: { run: nextTrack, repeatable: false },
-      prevTrack: { run: prevTrack, repeatable: false },
-      seekStart: { run: () => seekToFraction(0), repeatable: false },
-      seekEnd: { run: () => seekToFraction(1), repeatable: false },
+    // combo -> [action, repeatable]
+    const binds = {
+      __proto__: null,
+      arrowleft: [() => seekBy(-5000), true],
+      arrowright: [() => seekBy(5000), true],
+      j: [() => seekBy(-10000), true],
+      l: [() => seekBy(10000), true],
+      arrowup: [() => changeVolume(VOLUME_STEP), true],
+      arrowdown: [() => changeVolume(-VOLUME_STEP), true],
+      m: [toggleMute, false],
+      home: [() => seekToFraction(0), false],
+      end: [() => seekToFraction(1), false],
+      k: [() => {
+        const wasPlaying = P.isPlaying();
+        P.togglePlay();
+        notify(wasPlaying ? "Paused" : "Playing");
+      }, false],
+      "shift+n": [() => { P.next(); notify("Next track"); }, false],
+      "shift+p": [() => { P.back(); notify("Previous track"); }, false],
     };
 
-    const lookup = new Map();
-    for (const [action, combos] of Object.entries(keyMap)) {
-      for (const combo of Array.isArray(combos) ? combos : [combos]) {
-        lookup.set(combo, action);
-      }
-    }
-
-    function isInteractiveTarget() {
-      const el = document.activeElement;
-      if (!el || el === document.body) return false;
-      const tag = el.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
-      if (el.isContentEditable) return true;
-      const role = el.getAttribute && el.getAttribute("role");
-      return (
-        role === "textbox" ||
-        role === "searchbox" ||
-        role === "combobox" ||
-        role === "slider"
-      );
-    }
-
-    function comboFor(e) {
-      return (e.shiftKey ? "shift+" : "") + e.key.toLowerCase();
-    }
-
-    function onKeyDown(e) {
+    // Capture phase: beat Spotify to the key.
+    document.addEventListener("keydown", (e) => {
       if (e.defaultPrevented || e.isComposing) return;
       if (e.ctrlKey || e.altKey || e.metaKey) return;
-      if (isInteractiveTarget()) return;
+      if (document.activeElement?.matches(INTERACTIVE)) return;
 
-      if (!e.shiftKey && e.key.length === 1 && e.key >= "0" && e.key <= "9") {
-        e.preventDefault();
-        e.stopPropagation();
-        seekToFraction(Number(e.key) / 10);
-        return;
-      }
-
-      const actionName = lookup.get(comboFor(e));
-      if (!actionName) return;
-
-      const { run, repeatable } = actions[actionName];
-      if (e.repeat && !repeatable) return;
+      const digit = !e.shiftKey && e.key.length === 1 && e.key >= "0" && e.key <= "9";
+      const [run, repeatable] = digit
+        ? [() => seekToFraction(Number(e.key) / 10), false]
+        : binds[(e.shiftKey ? "shift+" : "") + e.key.toLowerCase()] || [];
+      if (!run || (e.repeat && !repeatable)) return;
+      if (e.repeat && Date.now() - lastRepeat < REPEAT_THROTTLE_MS) return;
+      lastRepeat = Date.now();
 
       e.preventDefault();
       e.stopPropagation();
-      run();
-    }
+      try {
+        run();
+      } catch (err) {
+        console.error("[YTKeybinds] action failed", err);
+      }
+    }, true);
 
-    // Capture phase so we beat Spotify's own handlers to the key.
-    document.addEventListener("keydown", onKeyDown, true);
-    console.log(`[YTKeybinds] loaded v${VERSION}`);
+    console.log("[YTKeybinds] loaded");
   }
 })();
